@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Viewport optimizado para iPhone: evita zoom y ajusta al notch -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="TuneFlow" />
+  <meta name="theme-color" content="#0a0a0f" />
+
+  <title>TuneFlow</title>
+
+  <!-- Manifest PWA -->
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- Fuentes: Syne (display) + DM Sans (body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- =============================================
+       HEADER: Logo + Barra de búsqueda
+  ============================================== -->
+  <header class="header">
+    <div class="header__logo">
+      <span class="logo-icon">♫</span>
+      <span class="logo-text">TuneFlow</span>
+    </div>
+
+    <form class="search-form" id="searchForm" role="search">
+      <div class="search-wrapper">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+        <input
+          type="search"
+          id="searchInput"
+          class="search-input"
+          placeholder="Buscar canciones, artistas…"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+        />
+        <button type="submit" class="search-btn" aria-label="Buscar">
+          Buscar
+        </button>
+      </div>
+    </form>
+  </header>
+
+  <!-- =============================================
+       NAVEGACIÓN DE TABS: Resultados / Favoritos
+  ============================================== -->
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="results" role="tab" aria-selected="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      Resultados
+    </button>
+    <button class="tab" data-tab="favorites" role="tab" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      Favoritos
+    </button>
+  </nav>
+
+  <!-- =============================================
+       CONTENIDO PRINCIPAL
+  ============================================== -->
+  <main class="main" id="mainContent">
+
+    <!-- Estado vacío / placeholder inicial -->
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon">🎵</div>
+      <p class="empty-title">Busca tu música</p>
+      <p class="empty-sub">Escribe una canción o artista arriba para comenzar.</p>
+    </div>
+
+    <!-- Spinner de carga -->
+    <div class="loader hidden" id="loader">
+      <div class="loader__ring"></div>
+      <span>Buscando…</span>
+    </div>
+
+    <!-- Grid de resultados de búsqueda -->
+    <section class="results-panel active" id="resultsPanel" aria-label="Resultados de búsqueda">
+      <div class="track-list" id="trackList"></div>
+    </section>
+
+    <!-- Panel de favoritos -->
+    <section class="results-panel" id="favoritesPanel" aria-label="Canciones favoritas">
+      <div class="favorites-header">
+        <h2 class="favorites-title">Mis Favoritos</h2>
+        <span class="favorites-count" id="favCount">0 canciones</span>
+      </div>
+      <div class="track-list" id="favoritesList"></div>
+      <div class="empty-favorites hidden" id="emptyFavorites">
+        <div class="empty-icon">💔</div>
+        <p class="empty-title">Sin favoritos aún</p>
+        <p class="empty-sub">Pulsa ♥ en cualquier canción para guardarla aquí.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- =============================================
+       REPRODUCTOR FIJO EN LA PARTE INFERIOR
+       El video de YouTube se embebe invisible aquí
+  ============================================== -->
+  <div class="player-bar" id="playerBar">
+
+    <!--
+      ============================================================
+      IFRAME DE YOUTUBE — TÉCNICA "INVISIBLE PERO VIVO" para iOS
+      ============================================================
+      ⚠️  NO usar display:none ni visibility:hidden → iOS Safari
+          destruye el contexto de audio del iframe.
+      ⚠️  NO usar overflow:hidden en el contenedor → el motor
+          WebKit lo trata como "fuera de pantalla" y lo suspende.
+
+      SOLUCIÓN: El iframe mide 1×1 px, tiene opacity:0 para ser
+      invisible y clip-path para no ocupar espacio visual, pero
+      sigue siendo un nodo ACTIVO en el árbol de renderizado.
+      iOS lo mantiene vivo porque tiene área pintable ≥ 1px.
+      ============================================================
+    -->
+    <div id="ytPlayerContainer" style="
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+      z-index: -1;
+    ">
+      <div id="ytPlayer"></div>
+    </div>
+
+    <!-- Info de la canción actual -->
+    <div class="player-info" id="playerInfo">
+      <div class="player-thumb" id="playerThumb">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+      </div>
+      <div class="player-meta">
+        <p class="player-title" id="playerTitle">Sin reproducción</p>
+        <p class="player-channel" id="playerChannel">—</p>
+      </div>
+      <!-- Botón favorito en el player -->
+      <button class="player-fav-btn" id="playerFavBtn" aria-label="Añadir a favoritos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      </button>
+    </div>
+
+    <!-- Barra de progreso -->
+    <div class="progress-container" id="progressContainer">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <div class="time-labels">
+      <span id="currentTime">0:00</span>
+      <span id="totalTime">0:00</span>
+    </div>
+
+    <!-- Controles de reproducción -->
+    <div class="player-controls">
+      <button class="ctrl-btn" id="prevBtn" aria-label="Anterior">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+      </button>
+      <button class="ctrl-btn ctrl-btn--play" id="playBtn" aria-label="Play/Pausa">
+        <!-- Ícono de Play (visible por defecto) -->
+        <svg id="iconPlay" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <!-- Ícono de Pausa (oculto por defecto) -->
+        <svg id="iconPause" class="hidden" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+      </button>
+      <button class="ctrl-btn" id="nextBtn" aria-label="Siguiente">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm2-8.14 5.51 3.64L8 15.14V9.86zm8-3.86h-2v12h2z"/></svg>
+      </button>
+    </div>
+
+  </div><!-- /player-bar -->
+
+  <!-- YouTube IFrame API: se carga de forma asíncrona -->
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="script.js"></script>
+
+</body>
+</html>
