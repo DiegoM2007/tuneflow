@@ -26,7 +26,7 @@
 
 // ⚠️  PEGA AQUÍ TU API KEY de YouTube Data API v3
 // Consíguela en: https://console.cloud.google.com → "YouTube Data API v3"
-const API_KEY = 'PEGA_TU_API_KEY_AQUI';
+const API_KEY = 'AIzaSyDuqcBihV_xdkHr3F0mCLhaCPz4uibpjj4';
 
 const SEARCH_URL  = 'https://www.googleapis.com/youtube/v3/search';
 const MAX_RESULTS = 15;
