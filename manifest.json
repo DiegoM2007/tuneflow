@@ -1,0 +1,17 @@
+{
+  "name": "TuneFlow",
+  "short_name": "TuneFlow",
+  "description": "Tu música, en todas partes.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#080810",
+  "theme_color": "#080810",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='40' fill='%23080810'/><text y='130' x='30' font-size='120' font-family='serif'>♫</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}

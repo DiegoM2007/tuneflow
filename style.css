@@ -1,0 +1,640 @@
+/* ════════════════════════════════════════════
+   TUNEFLOW — style.css
+   Dark · Mobile-first · iOS safe-area aware
+   ════════════════════════════════════════════ */
+
+/* ── Tokens ───────────────────────────────── */
+:root {
+  /* Colores */
+  --bg:           #080810;
+  --bg-card:      #10101c;
+  --bg-card-h:    #181828;
+  --bg-input:     #14141f;
+  --bg-player:    #0c0c18;
+
+  --accent:       #00e5a0;        /* verde-menta neón */
+  --accent-dim:   rgba(0,229,160,.12);
+  --accent-glow:  rgba(0,229,160,.30);
+  --accent-dark:  #00b87e;
+
+  --heart:        #ff4d6d;
+  --heart-dim:    rgba(255,77,109,.15);
+
+  --t1:           #eeeef8;        /* texto primario */
+  --t2:           #7878a0;        /* texto secundario */
+  --t3:           #303048;        /* texto muted / bordes */
+
+  /* Layout */
+  --header-h:     108px;          /* logo + buscador */
+  --tabs-h:       50px;
+  --player-h:     162px;          /* info + progress + controles */
+
+  /* iOS safe-areas */
+  --si-top:    env(safe-area-inset-top,    0px);
+  --si-bottom: env(safe-area-inset-bottom, 0px);
+  --si-left:   env(safe-area-inset-left,   0px);
+  --si-right:  env(safe-area-inset-right,  0px);
+
+  /* Radio */
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 26px;
+
+  /* Tipografía */
+  --f-display: 'Syne', sans-serif;
+  --f-body:    'Outfit', sans-serif;
+}
+
+/* ── Reset ────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  /* Sin scroll lateral en ningún caso */
+  overflow-x: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  font-family: var(--f-body);
+  font-size: 15px;
+  background: var(--bg);
+  color: var(--t1);
+  /* Gradiente de ambiente */
+  background-image:
+    radial-gradient(ellipse 60% 40% at 15% 0%,   rgba(0,229,160,.06) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 35% at 85% 100%,  rgba(80,60,200,.07) 0%, transparent 70%);
+  -webkit-font-smoothing: antialiased;
+  /* Elimina el highlight azul en tap (iOS) */
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Scroll invisible */
+::-webkit-scrollbar { width: 0; background: transparent; }
+
+/* Clase utilitaria para ocultar visualmente pero mantener en el DOM */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip: rect(0,0,0,0) !important;
+  white-space: nowrap !important;
+}
+
+/* ──────────────────────────────────────────
+   GHOST PLAYER — iframe de YouTube "vivo"
+   ──────────────────────────────────────────
+   ⚠️  NUNCA usar display:none, visibility:hidden
+       ni overflow:hidden aquí.
+   El iframe debe tener al menos 1×1 px de área
+   pintable para que WebKit no lo "hiberne".
+   Lo ponemos fuera del viewport con bottom/left
+   negativos, opacity:0 y pointer-events:none.
+*/
+#yt-ghost {
+  position: fixed;
+  bottom: -2px;
+  left:   -2px;
+  width:  1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
+  /* SIN overflow:hidden — crítico */
+}
+
+#yt-ghost iframe,
+#yt-player,
+#yt-player iframe {
+  width:  1px !important;
+  height: 1px !important;
+  border: none;
+}
+
+/* ── HEADER ───────────────────────────────── */
+.header {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 300;
+  padding:
+    calc(var(--si-top) + 14px)
+    calc(var(--si-right) + 16px)
+    14px
+    calc(var(--si-left)  + 16px);
+  background: rgba(8,8,16,.92);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border-bottom: 1px solid var(--t3);
+}
+
+.header-top {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-mark {
+  font-size: 22px;
+  color: var(--accent);
+  filter: drop-shadow(0 0 10px var(--accent-glow));
+  line-height: 1;
+}
+
+.logo-name {
+  font-family: var(--f-display);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: linear-gradient(120deg, var(--accent) 0%, #a8ffd4 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── BUSCADOR ─────────────────────────────── */
+.search-form { width: 100%; }
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1.5px solid var(--t3);
+  border-radius: var(--r-lg);
+  padding: 0 8px 0 14px;
+  transition: border-color .2s, box-shadow .2s;
+}
+
+.search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.search-ico {
+  width: 17px;
+  height: 17px;
+  color: var(--t2);
+  flex-shrink: 0;
+}
+
+/* font-size:16px es el mínimo para evitar zoom automático en iOS Safari */
+.search-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  font-family: var(--f-body);
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--t1);
+  caret-color: var(--accent);
+  padding: 13px 0;
+}
+
+.search-input::placeholder { color: var(--t3); }
+
+/* "Limpiar" nativo del campo search → no visible */
+.search-input::-webkit-search-cancel-button { display: none; }
+
+.search-btn {
+  flex-shrink: 0;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 20px;
+  padding: 8px 18px;
+  font-family: var(--f-body);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  cursor: pointer;
+  transition: opacity .15s, transform .1s;
+}
+.search-btn:active { opacity: .8; transform: scale(.97); }
+
+/* ── TABS ─────────────────────────────────── */
+.tabs {
+  position: fixed;
+  top: calc(var(--si-top) + var(--header-h));
+  left: 0;
+  right: 0;
+  z-index: 299;
+  display: flex;
+  background: rgba(8,8,16,.94);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--t3);
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--t2);
+  font-family: var(--f-body);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color .2s, border-color .2s;
+  /* área táctil mínima Apple HIG: 44×44 pt */
+  min-height: 44px;
+}
+
+.tab svg { width: 15px; height: 15px; }
+
+.tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ── MAIN ─────────────────────────────────── */
+.main {
+  margin-top: calc(var(--si-top) + var(--header-h) + var(--tabs-h));
+  margin-bottom: calc(var(--player-h) + var(--si-bottom));
+  padding: 16px 16px 8px;
+  padding-left:  calc(var(--si-left)  + 16px);
+  padding-right: calc(var(--si-right) + 16px);
+  min-height: 100px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+/* ── PANELES ──────────────────────────────── */
+.panel { display: none; }
+.panel--active { display: block; }
+
+/* ── SPLASH / ESTADO VACÍO ────────────────── */
+.splash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 56px 24px;
+  animation: fadeUp .4s ease both;
+}
+
+.splash-icon { font-size: 52px; margin-bottom: 14px; opacity: .55; }
+
+.splash-title {
+  font-family: var(--f-display);
+  font-size: 19px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.splash-sub {
+  color: var(--t2);
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 260px;
+}
+
+/* ── LOADER ───────────────────────────────── */
+.loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 56px 24px;
+  color: var(--t2);
+  font-size: 14px;
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 2.5px solid var(--t3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .75s linear infinite;
+}
+
+/* ── TRACK LIST ───────────────────────────── */
+.track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* ── TRACK CARD ───────────────────────────── */
+.track-card {
+  display: grid;
+  grid-template-columns: 54px 1fr 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  background: var(--bg-card);
+  border: 1.5px solid transparent;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background .18s, border-color .18s, transform .1s;
+  animation: fadeUp .35s ease both;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.track-card:active { transform: scale(.985); }
+.track-card:hover  { background: var(--bg-card-h); }
+
+.track-card--playing {
+  background: var(--bg-card-h);
+  border-color: rgba(0,229,160,.2);
+  box-shadow: 0 0 18px rgba(0,229,160,.06);
+}
+
+/* Thumbnail wrapper */
+.thumb-wrap {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  flex-shrink: 0;
+}
+
+.thumb-img {
+  width: 54px;
+  height: 54px;
+  border-radius: var(--r-sm);
+  object-fit: cover;
+  background: var(--bg-input);
+  display: block;
+}
+
+/* Overlay de barras animadas "now playing" */
+.thumb-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-sm);
+  background: rgba(0,0,0,.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity .2s;
+}
+
+.track-card--playing .thumb-overlay { opacity: 1; }
+
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2.5px;
+  height: 18px;
+}
+
+.bars b {
+  display: block;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: barBeat .7s ease-in-out infinite alternate;
+}
+.bars b:nth-child(2) { animation-delay: .18s; }
+.bars b:nth-child(3) { animation-delay: .36s; }
+
+/* Info textual */
+.track-info { overflow: hidden; }
+
+.track-title {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+  transition: color .2s;
+}
+
+.track-card--playing .track-title { color: var(--accent); }
+
+.track-artist {
+  font-size: 12px;
+  color: var(--t2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Botón corazón en card */
+.heart-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  background: none;
+  border: none;
+  color: var(--t3);
+  cursor: pointer;
+  border-radius: 50%;
+  transition: color .2s, transform .15s;
+  flex-shrink: 0;
+}
+
+.heart-btn svg { width: 20px; height: 20px; pointer-events: none; }
+.heart-btn:active { transform: scale(.82); }
+.heart-btn--on { color: var(--heart); }
+.heart-btn--on svg { fill: var(--heart); stroke: var(--heart); }
+
+/* ── FAVORITOS HEADER ─────────────────────── */
+.fav-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.fav-title {
+  font-family: var(--f-display);
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.fav-count {
+  font-size: 12px;
+  color: var(--t2);
+}
+
+/* ── PLAYER BAR ───────────────────────────── */
+.player {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 400;
+  padding:
+    12px
+    calc(var(--si-right) + 16px)
+    calc(var(--si-bottom) + 12px)
+    calc(var(--si-left)  + 16px);
+  background: var(--bg-player);
+  /* Glassmorphism — mismo truco de saturate para iOS */
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  border-top: 1px solid rgba(255,255,255,.07);
+  box-shadow: 0 -24px 60px rgba(0,0,0,.65);
+}
+
+/* Info de la canción actual */
+.player-info {
+  display: grid;
+  grid-template-columns: 42px 1fr 44px;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.player-thumb {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--t3);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.player-thumb svg { width: 20px; height: 20px; }
+.player-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+.player-meta { overflow: hidden; }
+
+.player-title {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 3px;
+}
+
+.player-artist {
+  font-size: 12px;
+  color: var(--t2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── BARRA DE PROGRESO ────────────────────── */
+.progress-track {
+  width: 100%;
+  height: 3px;
+  background: var(--t3);
+  border-radius: 2px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  /* Área táctil ampliada sin agrandar visualmente */
+  padding: 10px 0;
+  background-clip: content-box;
+  position: relative;
+}
+
+.progress-fill {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  height: 3px;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), #a8ffd4);
+  border-radius: 2px;
+  transition: width .5s linear;
+  pointer-events: none;
+}
+
+.time-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--t2);
+  margin-bottom: 8px;
+}
+
+/* ── CONTROLES ────────────────────────────── */
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+}
+
+.ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 50px;
+  height: 50px;
+  background: none;
+  border: none;
+  color: var(--t1);
+  cursor: pointer;
+  border-radius: 50%;
+  transition: color .15s, transform .1s;
+  /* Área mínima recomendada por Apple HIG */
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.ctrl-btn svg { width: 28px; height: 28px; pointer-events: none; }
+.ctrl-btn:active { transform: scale(.88); }
+
+/* Botón central de play/pausa */
+.ctrl-btn--play {
+  width: 60px;
+  height: 60px;
+  background: var(--accent);
+  color: #000;
+  box-shadow: 0 0 28px var(--accent-glow);
+  transition: background .2s, transform .1s, box-shadow .2s;
+}
+
+.ctrl-btn--play:active {
+  background: var(--accent-dark);
+  transform: scale(.91);
+}
+
+.ctrl-btn--play svg { width: 30px; height: 30px; }
+
+/* ── ANIMACIONES ──────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes barBeat {
+  from { height: 3px; }
+  to   { height: 18px; }
+}
+
+/* Delay escalonado de entrada para los tracks */
+.track-card:nth-child(1)  { animation-delay: .02s; }
+.track-card:nth-child(2)  { animation-delay: .05s; }
+.track-card:nth-child(3)  { animation-delay: .08s; }
+.track-card:nth-child(4)  { animation-delay: .11s; }
+.track-card:nth-child(5)  { animation-delay: .14s; }
+.track-card:nth-child(6)  { animation-delay: .17s; }
+.track-card:nth-child(7)  { animation-delay: .20s; }
+.track-card:nth-child(8)  { animation-delay: .23s; }
+.track-card:nth-child(9)  { animation-delay: .26s; }
+.track-card:nth-child(10) { animation-delay: .29s; }
+.track-card:nth-child(11) { animation-delay: .32s; }
+.track-card:nth-child(12) { animation-delay: .35s; }
