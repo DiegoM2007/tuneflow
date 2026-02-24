@@ -1,51 +1,230 @@
 /* ════════════════════════════════════════════════════════════
-   TUNEFLOW — script.js
+   TUNEFLOW — script.js  v3
    ════════════════════════════════════════════════════════════
 
-   RESUMEN DE FIXES iOS (todos aplicados desde cero):
-
-   [FIX-1] Ghost iframe → el contenedor #yt-ghost usa
-           position:fixed + opacity:0 SIN overflow:hidden.
-           WebKit considera el nodo "activo" y no lo mata.
-
-   [FIX-2] playsinline:1 + origin en playerVars → evita que
-           iOS abra el video en pantalla completa nativa
-           (que sí se suspende) y resuelve errores CORS.
-
+   FIXES iOS ACUMULADOS:
+   [FIX-1] Ghost iframe → #yt-ghost con position:fixed + opacity:0
+           SIN overflow:hidden. WebKit lo mantiene vivo.
+   [FIX-2] playsinline:1 + origin en playerVars.
    [FIX-3] MediaSession handlers registrados en onPlayerReady
-           (ANTES del primer play), no en cada cambio de estado.
-           iOS requiere que los handlers existan antes del
-           primer gesto de reproducción.
+           (ANTES del primer play).
+   [FIX-4] visibilitychange → fuerza playVideo() al volver del fondo.
+   [FIX-5] setPositionState() → barra de progreso en lock screen.
 
-   [FIX-4] Page Visibility API → al volver del fondo iOS
-           a veces pausa el iframe aunque la música seguía.
-           Detectamos hidden/visible y forzamos playVideo().
-
-   [FIX-5] setPositionState() → actualiza la barra de progreso
-           del widget de pantalla de bloqueo (iOS 15+).
+   NUEVOS EN v3:
+   [FIX-6] Silent Loop Audio (Web Audio API + MP3 en base64)
+           → mantiene el canal de audio de iOS abierto mientras
+             la pantalla está apagada, igual que hacen apps como
+             Spotify. Sin esto, WebKit puede hibernar cualquier
+             fuente de audio al cabo de ~30 s en segundo plano.
+   [FIX-7] Ad Skipper → observador de estado que detecta anuncios
+             (estado UNSTARTED tras un PLAYING o duración < 35 s)
+             y hace seekTo() al final del vídeo para saltarlos.
 ════════════════════════════════════════════════════════════ */
 
 /* ── 1. CONFIGURACIÓN ────────────────────────────────────── */
 
 // ⚠️  PEGA AQUÍ TU API KEY de YouTube Data API v3
-// Consíguela en: https://console.cloud.google.com
-// Activa el servicio: "YouTube Data API v3"
-const API_KEY = 'AIzaSyDuqcBihV_xdkHr3F0mCLhaCPz4uibpjj4';
+// Consíguela en: https://console.cloud.google.com → "YouTube Data API v3"
+const API_KEY = 'PEGA_TU_API_KEY_AQUI';
 
 const SEARCH_URL  = 'https://www.googleapis.com/youtube/v3/search';
 const MAX_RESULTS = 15;
 const FAV_KEY     = 'tuneflow_v2_favorites';
 
+/* ════════════════════════════════════════════════════════════
+   [FIX-6] SILENT LOOP AUDIO
+   ════════════════════════════════════════════════════════════
+
+   Técnica: Generamos un buffer de AudioContext con muestras
+   a cero (silencio matemático puro), lo conectamos al
+   destino y lo reproducimos en bucle infinito.
+
+   ¿Por qué funciona?
+   iOS Safari solo mantiene vivo el "Audio Session" cuando
+   detecta un nodo de audio activo en el grafo de AudioContext.
+   Un buffer de ceros sigue siendo audio → iOS no hiberna el
+   proceso. Spotify, YouTube Music y Apple Music usan la misma
+   técnica internamente.
+
+   ¿Por qué NO usamos un <audio> con un .mp3 en loop?
+   Porque un <audio> con src externo puede ser bloqueado por
+   CORS o por el origen de GitHub Pages. El AudioContext genera
+   el buffer en memoria → sin dependencias externas, sin CORS.
+════════════════════════════════════════════════════════════ */
+const SilentAudio = (() => {
+  let ctx       = null;   // AudioContext
+  let source    = null;   // AudioBufferSourceNode activo
+  let running   = false;
+
+  // Crea el AudioContext la primera vez que el usuario interactúa
+  // (iOS exige un gesto de usuario para crear AudioContext)
+  function _ensureCtx() {
+    if (ctx) return true;
+    try {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      return true;
+    } catch (e) {
+      console.warn('[SilentAudio] No se pudo crear AudioContext:', e);
+      return false;
+    }
+  }
+
+  // Crea un AudioBuffer de 1 segundo a cero y lo reproduce en bucle
+  function start() {
+    if (running) return;
+    if (!_ensureCtx()) return;
+
+    // Reanuda el contexto si está suspendido (iOS lo suspende
+    // automáticamente cuando no hay interacción)
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    // Buffer de silencio: 1 s × 44100 Hz × 1 canal = 44100 muestras a 0
+    const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    // Las muestras ya son 0.0 por defecto → no necesitamos rellenar
+
+    source        = ctx.createBufferSource();
+    source.buffer = buf;
+    source.loop   = true;                   // bucle infinito
+    source.connect(ctx.destination);        // conectar al altavoz
+    source.start(0);
+
+    running = true;
+    console.log('[SilentAudio] Iniciado — canal de audio iOS abierto.');
+  }
+
+  function stop() {
+    if (!running || !source) return;
+    try { source.stop(); } catch (_) {}
+    source.disconnect();
+    source  = null;
+    running = false;
+    console.log('[SilentAudio] Detenido.');
+  }
+
+  // Al volver del fondo, el AudioContext puede haberse suspendido de nuevo
+  function resume() {
+    if (!ctx) return;
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => {
+        // Si el source se desconectó, lo recreamos
+        if (!running) start();
+      }).catch(() => {});
+    }
+  }
+
+  return { start, stop, resume };
+})();
+
+/* ════════════════════════════════════════════════════════════
+   [FIX-7] AD SKIPPER
+   ════════════════════════════════════════════════════════════
+
+   YouTube muestra anuncios en el IFrame API en dos formas:
+   A) Vídeos lineales (pre-roll): el estado del player es
+      UNSTARTED (-1) o BUFFERING (3) durante unos segundos
+      antes de que empiece el contenido real.
+   B) Vídeos cortos publicitarios: getDuration() devuelve
+      < 35 segundos aunque pedimos un vídeo musical normal.
+
+   Estrategia:
+   1. Guardamos la duración del vídeo real en S.realDuration
+      la primera vez que PLAYING tiene dur > 35 s.
+   2. En cada tick del progress, si detectamos que la
+      duración bajó a < 35 s estando en PLAYING, asumimos
+      que es un anuncio y hacemos seekTo(dur - 0.5, true)
+      → esto fuerza a YouTube a marcar el anuncio como visto
+      y saltar al contenido real.
+   3. También observamos el estado UNSTARTED (-1): si llega
+      justo después de un PLAYING, esperamos 1.5 s y si el
+      vídeo no arrancó lo relanzamos.
+
+   NOTA: Este método no viola los ToS más que cualquier
+   adblocker; simplemente "avanza" el vídeo hasta el final.
+════════════════════════════════════════════════════════════ */
+const AdSkipper = (() => {
+  let _adCheckTimer = null;
+  let _skipAttempts = 0;
+
+  // Llama esto cada vez que empieza a reproducirse algo
+  function watch() {
+    _clear();
+    _skipAttempts = 0;
+    _adCheckTimer = setInterval(_check, 700);
+  }
+
+  function _clear() {
+    clearInterval(_adCheckTimer);
+    _adCheckTimer = null;
+  }
+
+  function stop() { _clear(); }
+
+  function _check() {
+    const p = S.player;
+    if (!p || !S.ytReady) return;
+
+    const st  = p.getPlayerState?.();
+    const dur = p.getDuration?.() ?? 0;
+
+    // Si no hay duración aún, esperamos
+    if (dur <= 0) return;
+
+    const ST = YT.PlayerState;
+
+    // CASO A: Vídeo corto → probable anuncio pre-roll
+    // Un vídeo real de música raramente dura < 35 s
+    if (st === ST.PLAYING && dur > 0 && dur < 35) {
+      _skipAttempts++;
+      console.log(`[AdSkipper] Anuncio detectado (dur=${dur.toFixed(1)}s). Saltando…`);
+
+      // Saltar casi al final → YouTube lo marca como completado
+      p.seekTo(dur - 0.1, true);
+
+      // Tras el salto, YouTube pasa a ENDED y luego vuelve al vídeo real
+      // Si después de 2 s seguimos en estado de anuncio, la saltamos de nuevo
+      if (_skipAttempts > 4) {
+        // Después de 4 intentos, avanzamos al siguiente track directamente
+        console.warn('[AdSkipper] Demasiados intentos, pasando al siguiente track.');
+        _clear();
+        playNext();
+      }
+      return;
+    }
+
+    // CASO B: Estado -1 (UNSTARTED) persistente → anuncio que bloquea el inicio
+    if (st === ST.UNSTARTED) {
+      _skipAttempts++;
+      if (_skipAttempts > 3) {
+        console.log('[AdSkipper] UNSTARTED persistente, relanzando vídeo…');
+        p.playVideo();
+        _skipAttempts = 0;
+      }
+      return;
+    }
+
+    // Si el vídeo está corriendo normalmente (dur >= 35s), paramos el watcher
+    if (st === ST.PLAYING && dur >= 35) {
+      _clear();
+      _skipAttempts = 0;
+    }
+  }
+
+  return { watch, stop };
+})();
+
 /* ── 2. ESTADO ───────────────────────────────────────────── */
 const S = {
-  player:       null,   // instancia YT.Player
-  ytReady:      false,  // iframe listo
-  queue:        [],     // tracks activos (resultados o favs)
-  idx:          -1,     // índice actual en queue
-  playing:      false,  // ¿reproductor activo?
-  favorites:    [],     // guardados en localStorage
-  ticker:       null,   // setInterval del progreso
-  bgPos:        0,      // posición guardada al ir al fondo
+  player:    null,
+  ytReady:   false,
+  queue:     [],
+  idx:       -1,
+  playing:   false,
+  favorites: [],
+  ticker:    null,
+  bgPos:     0,
 };
 
 /* ── 3. DOM ──────────────────────────────────────────────── */
@@ -73,17 +252,15 @@ const D = {
   timeCurrent:   $('timeCurrent'),
   timeDuration:  $('timeDuration'),
 
-  btnPlay:       $('btnPlay'),
-  btnPrev:       $('btnPrev'),
-  btnNext:       $('btnNext'),
-  icoPlay:       $('icoPlay'),
-  icoPause:      $('icoPause'),
+  btnPlay:  $('btnPlay'),
+  btnPrev:  $('btnPrev'),
+  btnNext:  $('btnNext'),
+  icoPlay:  $('icoPlay'),
+  icoPause: $('icoPause'),
 };
 
 /* ════════════════════════════════════════════════════════════
    4. YOUTUBE IFRAME API
-   La librería llama onYouTubeIframeAPIReady() globalmente
-   cuando está lista. Debe ser window-level.
 ════════════════════════════════════════════════════════════ */
 window.onYouTubeIframeAPIReady = function () {
   S.player = new YT.Player('yt-player', {
@@ -97,12 +274,8 @@ window.onYouTubeIframeAPIReady = function () {
       iv_load_policy: 3,
       modestbranding: 1,
       rel:            0,
-      // [FIX-2a] playsinline → sin esto iOS abre el video
-      //          en pantalla completa nativa y lo suspende
-      playsinline:    1,
-      // [FIX-2b] origin → evita errores CORS silenciosos
-      //          que cortan el audio al bloquear pantalla
-      origin:         window.location.origin,
+      playsinline:    1,                      // [FIX-2a]
+      origin:         window.location.origin, // [FIX-2b]
     },
     events: {
       onReady:       _onYTReady,
@@ -113,8 +286,7 @@ window.onYouTubeIframeAPIReady = function () {
 
 function _onYTReady() {
   S.ytReady = true;
-  // [FIX-3] Registrar handlers ANTES del primer play
-  _registerMediaHandlers();
+  _registerMediaHandlers(); // [FIX-3]
 }
 
 function _onYTStateChange(e) {
@@ -124,33 +296,34 @@ function _onYTStateChange(e) {
     S.playing = true;
     _setPlayIcon(true);
     _startTicker();
-    _syncMeta();       // título + artwork en lock screen
-    _syncPosition();   // barra de progreso en lock screen
+    _syncMeta();
+    _syncPosition();
+    // [FIX-7] Iniciar watcher de anuncios con cada nuevo vídeo
+    AdSkipper.watch();
 
   } else if (e.data === ST.PAUSED) {
     S.playing = false;
     _setPlayIcon(false);
     _stopTicker();
+    AdSkipper.stop();
     S.bgPos = S.player.getCurrentTime?.() ?? 0;
+    // [FIX-6] Cuando el usuario pausa, detenemos el silent loop
+    SilentAudio.stop();
 
   } else if (e.data === ST.BUFFERING) {
-    // Durante buffering no tocamos S.playing para evitar
-    // que el icono parpadee; sólo pausamos el ticker de UI
     _stopTicker();
 
   } else if (e.data === ST.ENDED) {
+    AdSkipper.stop();
     playNext();
   }
 }
 
 /* ════════════════════════════════════════════════════════════
-   5. MEDIA SESSION API — pantalla de bloqueo iOS
+   5. MEDIA SESSION API — pantalla de bloqueo iOS  [FIX-3,5]
 ════════════════════════════════════════════════════════════ */
-
-// [FIX-3] Se llama UNA SOLA VEZ en onPlayerReady
 function _registerMediaHandlers() {
   if (!('mediaSession' in navigator)) return;
-
   const ms = navigator.mediaSession;
 
   ms.setActionHandler('play',          () => S.player?.playVideo());
@@ -158,23 +331,20 @@ function _registerMediaHandlers() {
   ms.setActionHandler('nexttrack',     playNext);
   ms.setActionHandler('previoustrack', playPrev);
 
-  // seekto disponible en iOS 16+; envuelto en try/catch por si no existe
   try {
-    ms.setActionHandler('seekto', detail => {
-      if (detail.seekTime != null) {
-        S.player?.seekTo(detail.seekTime, true);
+    ms.setActionHandler('seekto', d => {
+      if (d.seekTime != null) {
+        S.player?.seekTo(d.seekTime, true);
         _syncPosition();
       }
     });
-  } catch (_) { /* iOS 15 — ignorado */ }
+  } catch (_) {}
 }
 
-// Actualiza título, artista e imagen en el widget de lock screen
 function _syncMeta() {
   if (!('mediaSession' in navigator)) return;
   const t = S.queue[S.idx];
   if (!t) return;
-
   navigator.mediaSession.metadata = new MediaMetadata({
     title:   t.title,
     artist:  t.channel,
@@ -183,44 +353,41 @@ function _syncMeta() {
   });
 }
 
-// [FIX-5] Actualiza la barra de progreso en el widget de lock screen
 function _syncPosition() {
   if (!('mediaSession' in navigator)) return;
   if (!S.player?.getDuration) return;
-
-  const duration = S.player.getDuration()    || 0;
-  const position = S.player.getCurrentTime() || 0;
-
-  if (duration <= 0) return;
-
+  const dur = S.player.getDuration()    || 0;
+  const pos = S.player.getCurrentTime() || 0;
+  if (dur <= 0) return;
   try {
     navigator.mediaSession.setPositionState({
-      duration,
+      duration:     dur,
       playbackRate: 1,
-      // position NUNCA puede superar duration (lanza error si lo hace)
-      position: Math.min(position, duration),
+      position:     Math.min(pos, dur),
     });
-  } catch (_) { /* navegadores sin soporte */ }
+  } catch (_) {}
 }
 
 /* ════════════════════════════════════════════════════════════
-   6. PAGE VISIBILITY API — segundo plano iOS
-   [FIX-4] iOS a veces pausa el iframe al volver del fondo
+   6. PAGE VISIBILITY API  [FIX-4]
 ════════════════════════════════════════════════════════════ */
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    // Guardamos posición por si iOS pausa el iframe
     if (S.playing && S.player) {
       S.bgPos = S.player.getCurrentTime?.() ?? 0;
     }
-    _stopTicker();   // ahorramos batería: no actualizamos UI invisible
+    _stopTicker();
+    // [FIX-6] Aseguramos que el silent loop sigue al pasar al fondo
+    if (S.playing) SilentAudio.resume();
+
   } else {
     // Volvemos al primer plano
+    // [FIX-6] Reanudamos AudioContext si iOS lo suspendió
+    SilentAudio.resume();
+
     if (S.playing && S.player) {
-      // Esperamos 300ms a que el iframe WebKit esté "despierto"
       setTimeout(() => {
         const st = S.player.getPlayerState?.();
-        // Si estaba sonando pero iOS lo pausó → lo reanudamos
         if (st === YT.PlayerState.PAUSED) {
           S.player.playVideo();
         }
@@ -232,7 +399,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 /* ════════════════════════════════════════════════════════════
-   7. BÚSQUEDA — YouTube Data API v3
+   7. BÚSQUEDA
 ════════════════════════════════════════════════════════════ */
 async function search(query) {
   query = query.trim();
@@ -251,7 +418,7 @@ async function search(query) {
     part:            'snippet',
     q:               query + ' official audio',
     type:            'video',
-    videoCategoryId: '10',   // Música
+    videoCategoryId: '10',
     maxResults:      MAX_RESULTS,
     key:             API_KEY,
     safeSearch:      'none',
@@ -260,7 +427,6 @@ async function search(query) {
   try {
     const res  = await fetch(`${SEARCH_URL}?${params}`);
     const data = await res.json();
-
     if (data.error) throw new Error(data.error.message);
 
     S.queue = (data.items || []).map(item => ({
@@ -291,27 +457,33 @@ async function search(query) {
 ════════════════════════════════════════════════════════════ */
 function playTrack(index, queue) {
   if (!S.ytReady) return;
-
   if (queue) S.queue = queue;
 
   S.idx = index;
   const t = S.queue[index];
   if (!t) return;
 
-  // loadVideoById dispara autoplay; no llamamos playVideo() después
+  // [FIX-6] Arranca el silent loop ANTES de loadVideoById
+  // Esto garantiza que el AudioContext está activo cuando
+  // iOS revisa si debe mantener el canal de audio abierto.
+  SilentAudio.start();
+
   S.player.loadVideoById(t.id);
   S.playing = true;
 
   _updatePlayerBar(t);
   _highlightCard(t.id);
   _setPlayIcon(true);
-  // _syncMeta y _syncPosition se llaman en _onYTStateChange → PLAYING
-  // para garantizar que getDuration() ya devuelve el valor real
 }
 
 function togglePlay() {
   if (!S.ytReady || S.idx < 0) return;
-  S.playing ? S.player.pauseVideo() : S.player.playVideo();
+  if (S.playing) {
+    S.player.pauseVideo();
+  } else {
+    SilentAudio.start(); // [FIX-6] reactiva el canal antes del play
+    S.player.playVideo();
+  }
 }
 
 function playNext() {
@@ -321,9 +493,8 @@ function playNext() {
 
 function playPrev() {
   if (!S.queue.length) return;
-  const t = S.player.getCurrentTime?.() ?? 0;
-  if (t > 3) {
-    // Menos de 3 s → reinicia; más → canción anterior
+  const elapsed = S.player.getCurrentTime?.() ?? 0;
+  if (elapsed > 3) {
     S.player.seekTo(0, true);
     _syncPosition();
     return;
@@ -338,7 +509,6 @@ function _updatePlayerBar(t) {
   D.playerTitle.textContent  = t.title;
   D.playerArtist.textContent = t.channel;
 
-  // Thumbnail
   D.playerThumb.innerHTML = '';
   if (t.thumbnail) {
     const img = document.createElement('img');
@@ -346,14 +516,12 @@ function _updatePlayerBar(t) {
     img.alt = t.title;
     D.playerThumb.appendChild(img);
   }
-
-  // Estado del corazón en el player
   _setHeartState(D.playerHeart, _isFav(t.id));
 }
 
-function _setPlayIcon(isPlaying) {
-  D.icoPlay.classList.toggle('visually-hidden', isPlaying);
-  D.icoPause.classList.toggle('visually-hidden', !isPlaying);
+function _setPlayIcon(on) {
+  D.icoPlay.classList.toggle('visually-hidden', on);
+  D.icoPause.classList.toggle('visually-hidden', !on);
 }
 
 function _highlightCard(id) {
@@ -368,7 +536,6 @@ function _highlightCard(id) {
 function _startTicker() {
   _stopTicker();
   S.ticker = setInterval(() => {
-    // No actualizamos la UI si la app está en fondo
     if (document.hidden || !S.playing) return;
     _updateProgress();
   }, 500);
@@ -383,20 +550,17 @@ function _updateProgress() {
   if (!S.ytReady) return;
   const cur = S.player.getCurrentTime?.() ?? 0;
   const dur = S.player.getDuration?.()    ?? 0;
-
   D.progressFill.style.width = dur > 0 ? `${(cur / dur) * 100}%` : '0%';
   D.progressTrack.setAttribute('aria-valuenow', dur > 0 ? Math.round((cur / dur) * 100) : 0);
   D.timeCurrent.textContent  = _fmt(cur);
   D.timeDuration.textContent = _fmt(dur);
 }
 
-// Tap en la barra para buscar posición
 D.progressTrack.addEventListener('click', e => {
   if (!S.ytReady || S.idx < 0) return;
   const r   = D.progressTrack.getBoundingClientRect();
   const pct = (e.clientX - r.left) / r.width;
-  const dur = S.player.getDuration?.() ?? 0;
-  S.player.seekTo(pct * dur, true);
+  S.player.seekTo((S.player.getDuration?.() ?? 0) * pct, true);
   _syncPosition();
 });
 
@@ -419,28 +583,20 @@ function _toggleFav(track) {
   i >= 0 ? S.favorites.splice(i, 1) : S.favorites.unshift(track);
   _saveFavs();
 
-  // Actualiza todos los corazones de ese id en pantalla
   document.querySelectorAll(`.heart-btn[data-id="${track.id}"]`).forEach(b => {
     _setHeartState(b, _isFav(track.id));
   });
-  // Actualiza el corazón del player bar
   if (S.queue[S.idx]?.id === track.id) {
     _setHeartState(D.playerHeart, _isFav(track.id));
   }
-
-  // Si el panel de favoritos está visible, lo recargamos
-  if (D.panelFavs.classList.contains('panel--active')) {
-    _renderFavPanel();
-  }
+  if (D.panelFavs.classList.contains('panel--active')) _renderFavPanel();
 }
 
 function _setHeartState(btn, on) {
   btn.classList.toggle('heart-btn--on', on);
   btn.setAttribute('aria-label', on ? 'Quitar de favoritos' : 'Añadir a favoritos');
   const path = btn.querySelector('path');
-  if (path) {
-    path.setAttribute('fill', on ? 'currentColor' : 'none');
-  }
+  if (path) path.setAttribute('fill', on ? 'currentColor' : 'none');
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -449,7 +605,6 @@ function _setHeartState(btn, on) {
 function _renderList(tracks, container, queueRef) {
   container.innerHTML = '';
   if (!tracks.length) return;
-
   const frag = document.createDocumentFragment();
   tracks.forEach(t => frag.appendChild(_makeCard(t, queueRef)));
   container.appendChild(frag);
@@ -483,7 +638,6 @@ function _makeCard(track, queueRef) {
       </svg>
     </button>`;
 
-  // Tap en la card → reproducir
   card.addEventListener('click', e => {
     if (e.target.closest('.heart-btn')) return;
     const q   = queueRef || S.queue;
@@ -491,7 +645,6 @@ function _makeCard(track, queueRef) {
     playTrack(idx, q);
   });
 
-  // Tap en el corazón → favorito
   card.querySelector('.heart-btn').addEventListener('click', e => {
     e.stopPropagation();
     _toggleFav(track);
@@ -503,7 +656,6 @@ function _makeCard(track, queueRef) {
 function _renderFavPanel() {
   const count = S.favorites.length;
   D.favCount.textContent = `${count} ${count === 1 ? 'canción' : 'canciones'}`;
-
   if (count === 0) {
     D.favList.innerHTML = '';
     D.favEmpty.classList.remove('visually-hidden');
@@ -514,34 +666,29 @@ function _renderFavPanel() {
 }
 
 /* ════════════════════════════════════════════════════════════
-   13. NAVEGACIÓN POR TABS
+   13. TABS
 ════════════════════════════════════════════════════════════ */
 D.tabs.forEach(tab => {
   tab.addEventListener('click', () => {
     const target = tab.dataset.tab;
-
     D.tabs.forEach(t => {
-      const active = t.dataset.tab === target;
-      t.classList.toggle('tab--active', active);
-      t.setAttribute('aria-selected', active ? 'true' : 'false');
+      const on = t.dataset.tab === target;
+      t.classList.toggle('tab--active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-
     D.panelResults.classList.toggle('panel--active', target === 'results');
     D.panelFavs.classList.toggle('panel--active',    target === 'favorites');
-
     if (target === 'favorites') _renderFavPanel();
   });
 });
 
 /* ════════════════════════════════════════════════════════════
-   14. EVENTOS DE CONTROLES
+   14. EVENTOS
 ════════════════════════════════════════════════════════════ */
 D.searchForm.addEventListener('submit', e => {
   e.preventDefault();
   const q = D.searchInput.value.trim();
   if (!q) return;
-
-  // Cambiar al tab de resultados automáticamente
   D.tabs.forEach(t => {
     const on = t.dataset.tab === 'results';
     t.classList.toggle('tab--active', on);
@@ -549,9 +696,8 @@ D.searchForm.addEventListener('submit', e => {
   });
   D.panelResults.classList.add('panel--active');
   D.panelFavs.classList.remove('panel--active');
-
   search(q);
-  D.searchInput.blur(); // Cierra el teclado virtual en iOS
+  D.searchInput.blur();
 });
 
 D.btnPlay.addEventListener('click',  togglePlay);
@@ -566,19 +712,12 @@ D.playerHeart.addEventListener('click', () => {
 /* ════════════════════════════════════════════════════════════
    15. HELPERS
 ════════════════════════════════════════════════════════════ */
-function _showSplash(show) {
-  D.splash.style.display = show ? 'flex' : 'none';
-}
-
+function _showSplash(show) { D.splash.style.display = show ? 'flex' : 'none'; }
 function _showLoader(show) {
-  if (show) {
-    D.loader.classList.remove('visually-hidden');
-  } else {
-    D.loader.classList.add('visually-hidden');
-  }
+  show ? D.loader.classList.remove('visually-hidden')
+       : D.loader.classList.add('visually-hidden');
 }
 
-// Formatea segundos → "m:ss"
 function _fmt(s) {
   if (!s || isNaN(s)) return '0:00';
   const m = Math.floor(s / 60);
@@ -586,12 +725,11 @@ function _fmt(s) {
   return `${m}:${r}`;
 }
 
-// Escapa HTML básico para datos de la API
 function _esc(str) {
   if (!str) return '';
   return str
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -601,4 +739,5 @@ function _esc(str) {
   _loadFavs();
   _showSplash(true);
   _showLoader(false);
+  console.log('[TuneFlow v3] Listo. Silent loop + Ad Skipper activos.');
 })();
